@@ -39,7 +39,7 @@
       margin-bottom: 4px;
       color: #c7d2fe;
     }
-    input {
+    input, select {
       width: 100%;
       padding: 8px 10px;
       margin-bottom: 10px;
@@ -50,7 +50,7 @@
       font-size: 0.9rem;
       outline: none;
     }
-    input:focus {
+    input:focus, select:focus {
       border-color: #4f46e5;
       box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.5);
     }
@@ -69,6 +69,13 @@
     button:active {
       transform: scale(0.98);
     }
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+    .row > div {
+      flex: 1;
+    }
     .result {
       font-size: 0.9rem;
       line-height: 1.4;
@@ -83,36 +90,62 @@
       color: #fbbf24;
       margin-top: 4px;
     }
+    .tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #111827;
+      border: 1px solid #374151;
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
   <h1>FX Commission Calculator</h1>
   <div class="subtitle">
     Cuenta <strong>RAW Pricing</strong> de Forex.com – 7 unidades de la moneda
-    base por lote y por lado.
+    base por lote y por lado. Costo mostrado = <strong>round-trip (in + out) por trade</strong>.
   </div>
 
   <div class="card">
-    <label for="pair">Par (ej: EURUSD, GBPUSD, USDJPY)</label>
-    <input id="pair" type="text" placeholder="EURUSD" />
+    <label for="pair">Par (ej: EURUSD, GU, UJ, GJ…)</label>
+    <input id="pair" type="text" placeholder="EURUSD / GU / UJ / GJ" />
 
-    <label for="price">Precio actual del par</label>
-    <input id="price" type="number" step="0.00001" placeholder="1.0950" />
+    <div class="row">
+      <div>
+        <label for="direction">Dirección</label>
+        <select id="direction">
+          <option value="BUY">BUY</option>
+          <option value="SELL">SELL</option>
+        </select>
+      </div>
+      <div>
+        <label for="price">Precio actual (deja vacío para auto)</label>
+        <input id="price" type="number" step="0.00001" placeholder="auto" />
+      </div>
+    </div>
 
     <label for="lot">Tamaño de lote (ej: 0.5, 1, 8)</label>
     <input id="lot" type="number" step="0.01" placeholder="1" />
 
     <div class="small">
-      Regla aplicada:
-      <br />• Si el par empieza con <strong>USD</strong> → 7 USD por lado por
-      lote.
-      <br />• Si el par termina en <strong>USD</strong> (EURUSD, GBPUSD,
-      AUDUSD, NZDUSD…) → 7 (moneda base) convertido a USD usando el precio.
-      <br />• Cruces sin USD se aproximan (ajusta tú si hace falta).
+      Auto-pair soporta:
+      <span class="tag">EU → EURUSD</span>
+      <span class="tag">GU → GBPUSD</span>
+      <span class="tag">UJ → USDJPY</span>
+      <span class="tag">EJ → EURJPY</span>
+      <span class="tag">GJ → GBPJPY</span>
+      <span class="tag">AU → AUDUSD</span>
+      <span class="tag">NU → NZDUSD</span>
+      <span class="tag">UC → USDCAD</span>
     </div>
+
     <div id="pairWarning" class="warning" style="display: none">
-      Este par no tiene USD como base ni como cotización. El cálculo es una
-      aproximación.
+      Este par no tiene USD como base ni como cotización. El cálculo de comisión es una aproximación.
+    </div>
+    <div id="apiWarning" class="warning" style="display: none">
+      No se pudo obtener el precio en vivo. Pon el precio manualmente.
     </div>
   </div>
 
@@ -132,7 +165,7 @@
     <div class="small">
       Si solo pones trades/día → calcula coste diario.
       <br />
-      Si también pones Tokyo/London/NY → calcula coste por sesión.
+      Si también pones Tokyo/London/NY → coste por sesión.
     </div>
   </div>
 
@@ -145,69 +178,114 @@
   </div>
 
   <script>
-    function parsePair(raw) {
+    // Mapea aliases tipo GU, EU, UJ, etc. a pares completos
+    function normalizePairInput(raw) {
       if (!raw) return null;
-      const p = raw.trim().toUpperCase();
-      if (!/^[A-Z]{6,7}$/.test(p)) return null;
-      const base = p.slice(0, 3);
-      const quote = p.slice(3, 6);
-      return { full: p, base, quote };
+      let s = raw.trim().toUpperCase();
+      // quitar espacios, /, -, _
+      s = s.replace(/[^A-Z]/g, "");
+
+      const aliasMap = {
+        EU: "EURUSD",
+        GU: "GBPUSD",
+        UJ: "USDJPY",
+        EJ: "EURJPY",
+        GJ: "GBPJPY",
+        AU: "AUDUSD",
+        NU: "NZDUSD",
+        UC: "USDCAD"
+      };
+
+      if (aliasMap[s]) return aliasMap[s];
+      if (s.length === 6) return s;
+      return null;
     }
 
-    function calc() {
+    function parsePair(raw) {
+      const norm = normalizePairInput(raw);
+      if (!norm) return null;
+      const base = norm.slice(0, 3);
+      const quote = norm.slice(3, 6);
+      return { full: norm, base, quote };
+    }
+
+    // API simple para obtener precio spot (mid) desde exchangerate.host
+    async function fetchLivePrice(pair) {
+      const { base, quote } = pair;
+      const url = `https://api.exchangerate.host/latest?base=${base}&symbols=${quote}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error("Bad response");
+      const data = await resp.json();
+      if (!data.rates || !data.rates[quote]) {
+        throw new Error("No rate");
+      }
+      return data.rates[quote]; // 1 base = rate quote
+    }
+
+    async function calc() {
       const pairInput = document.getElementById("pair").value;
-      const priceInput = parseFloat(document.getElementById("price").value);
+      const direction = document.getElementById("direction").value;
+      let priceInput = parseFloat(document.getElementById("price").value);
       const lotInput = parseFloat(document.getElementById("lot").value);
-      const tradesDay = parseFloat(
-        document.getElementById("tradesDay").value
-      );
+      const tradesDay = parseFloat(document.getElementById("tradesDay").value);
       const tradesTokyo = parseFloat(document.getElementById("tokyo").value);
       const tradesLondon = parseFloat(document.getElementById("london").value);
       const tradesNY = parseFloat(document.getElementById("ny").value);
 
       const resultDiv = document.getElementById("result");
       const pairWarning = document.getElementById("pairWarning");
+      const apiWarning = document.getElementById("apiWarning");
       pairWarning.style.display = "none";
+      apiWarning.style.display = "none";
 
       const pair = parsePair(pairInput);
       if (!pair) {
         resultDiv.textContent =
-          "Par inválido. Escribe algo tipo EURUSD, GBPUSD, USDJPY…";
+          "Par inválido. Usa algo tipo EURUSD, GU, UJ, GJ…";
         return;
       }
+
+      // Si no hay precio -> lo buscamos en vivo
       if (!priceInput || priceInput <= 0) {
-        resultDiv.textContent = "Pon un precio válido (ej. 1.0950).";
-        return;
+        try {
+          const live = await fetchLivePrice(pair);
+          priceInput = live;
+          document.getElementById("price").value = live.toFixed(5);
+        } catch (e) {
+          apiWarning.style.display = "block";
+          resultDiv.textContent =
+            "No se pudo obtener el precio en vivo. Escribe el precio manualmente.";
+          return;
+        }
       }
+
       if (!lotInput || lotInput <= 0) {
         resultDiv.textContent = "Pon un tamaño de lote mayor que 0.";
         return;
       }
 
-      const BASE = 7.0; // 7 unidades de moneda base por lado y por lote
+      const BASE = 7.0; // 7 unidades de moneda base por lado y lote
       let baseToUsd;
 
       if (pair.base === "USD") {
-        // USDXXX → 1 USD = 1 USD
+        // USDXXX → 7 USD por lado
         baseToUsd = 1.0;
       } else if (pair.quote === "USD") {
-        // XXXUSD → 1 base = price USD
+        // XXXUSD → 7 (XXX) convertido a USD con el precio
         baseToUsd = priceInput;
       } else {
-        // Cruces sin USD (aproximación)
+        // cruces sin USD → aproximación
         baseToUsd = 1.0;
         pairWarning.style.display = "block";
       }
 
-      // Comisión por lado por lote en USD
       const perSidePerLot = BASE * baseToUsd;
-      // Round-trip (in + out) por lote
       const roundTripPerLot = perSidePerLot * 2;
-      // Comisión por trade con el lot size indicado
       const perTrade = roundTripPerLot * lotInput;
 
       let lines = [];
       lines.push(`Par: ${pair.full}`);
+      lines.push(`Dirección: ${direction}`);
       lines.push(`Precio usado: ${priceInput}`);
       lines.push(`Lotes: ${lotInput}`);
       lines.push("");
@@ -261,7 +339,9 @@
       resultDiv.textContent = lines.join("\n");
     }
 
-    document.getElementById("calcBtn").addEventListener("click", calc);
+    document.getElementById("calcBtn").addEventListener("click", function () {
+      calc();
+    });
   </script>
 </body>
 </html>
