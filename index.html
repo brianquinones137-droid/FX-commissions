@@ -142,7 +142,7 @@
     </div>
 
     <div id="pairWarning" class="warning" style="display: none">
-      Este par no tiene USD como base ni como cotización. El cálculo de comisión es una aproximación.
+      No se pudo obtener correctamente la conversión base→USD. Ajusta el resultado manualmente si operas cruces raros.
     </div>
     <div id="apiWarning" class="warning" style="display: none">
       No se pudo obtener el precio en vivo. Pon el precio manualmente.
@@ -210,8 +210,7 @@
     }
 
     // API simple para obtener precio spot (mid) desde exchangerate.host
-    async function fetchLivePrice(pair) {
-      const { base, quote } = pair;
+    async function fetchLivePrice(base, quote) {
       const url = `https://api.exchangerate.host/latest?base=${base}&symbols=${quote}`;
       const resp = await fetch(url);
       if (!resp.ok) throw new Error("Bad response");
@@ -245,10 +244,10 @@
         return;
       }
 
-      // Si no hay precio -> lo buscamos en vivo
+      // Si no hay precio -> lo buscamos en vivo (para el par de trading)
       if (!priceInput || priceInput <= 0) {
         try {
-          const live = await fetchLivePrice(pair);
+          const live = await fetchLivePrice(pair.base, pair.quote);
           priceInput = live;
           document.getElementById("price").value = live.toFixed(5);
         } catch (e) {
@@ -265,23 +264,29 @@
       }
 
       const BASE = 7.0; // 7 unidades de moneda base por lado y lote
-      let baseToUsd;
+      let baseToUsd = 1.0;
 
-      if (pair.base === "USD") {
-        // USDXXX → 7 USD por lado
-        baseToUsd = 1.0;
-      } else if (pair.quote === "USD") {
-        // XXXUSD → 7 (XXX) convertido a USD con el precio
-        baseToUsd = priceInput;
-      } else {
-        // cruces sin USD → aproximación
+      try {
+        if (pair.base === "USD") {
+          // USDXXX → 7 USD por lado
+          baseToUsd = 1.0;
+        } else if (pair.quote === "USD") {
+          // XXXUSD → 7 (XXX) convertido a USD con el precio actual de este par
+          baseToUsd = priceInput;
+        } else {
+          // cruces sin USD → necesitamos baseUSD (ej. EURUSD, GBPUSD, AUDUSD...)
+          const baseUsdRate = await fetchLivePrice(pair.base, "USD");
+          baseToUsd = baseUsdRate;
+        }
+      } catch (e) {
+        // si algo falla, avisamos y usamos 1.0 como aproximación
         baseToUsd = 1.0;
         pairWarning.style.display = "block";
       }
 
-      const perSidePerLot = BASE * baseToUsd;
-      const roundTripPerLot = perSidePerLot * 2;
-      const perTrade = roundTripPerLot * lotInput;
+      const perSidePerLot = BASE * baseToUsd;      // comisión por lado por lote (USD)
+      const roundTripPerLot = perSidePerLot * 2;   // in + out por lote
+      const perTrade = roundTripPerLot * lotInput; // por trade, con tu lot size
 
       let lines = [];
       lines.push(`Par: ${pair.full}`);
