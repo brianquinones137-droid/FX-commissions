@@ -1,7 +1,267 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>FX Commission Calculator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    * {
+      box-sizing: border-box;
+      font-family: -apple-system, system-ui, BlinkMacSystemFont, "SF Pro Text",
+        "Segoe UI", sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #050816;
+      color: #f5f5f5;
+    }
+    h1 {
+      font-size: 1.4rem;
+      margin: 0 0 4px;
+    }
+    .subtitle {
+      font-size: 0.8rem;
+      color: #9ca3af;
+      margin-bottom: 12px;
+    }
+    .card {
+      background: #0b1020;
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 12px;
+      border: 1px solid #1f2937;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6);
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      margin-bottom: 4px;
+      color: #c7d2fe;
+    }
+    input {
+      width: 100%;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      border-radius: 8px;
+      border: 1px solid #374151;
+      background: #050816;
+      color: #f9fafb;
+      font-size: 0.9rem;
+      outline: none;
+    }
+    input:focus {
+      border-color: #4f46e5;
+      box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.5);
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      border-radius: 999px;
+      border: none;
+      font-size: 0.95rem;
+      font-weight: 600;
+      background: linear-gradient(135deg, #4f46e5, #06b6d4);
+      color: #ffffff;
+      cursor: pointer;
+      margin: 4px 0 10px;
+    }
+    button:active {
+      transform: scale(0.98);
+    }
+    .result {
+      font-size: 0.9rem;
+      line-height: 1.4;
+      white-space: pre-line;
+    }
+    .small {
+      font-size: 0.75rem;
+      color: #9ca3af;
+    }
+    .warning {
+      font-size: 0.75rem;
+      color: #fbbf24;
+      margin-top: 4px;
+    }
+  </style>
+</head>
 <body>
-<h1>FX Commission Calculator</h1>
-<p>GitHub Pages is active 🎯</p>
+  <h1>FX Commission Calculator</h1>
+  <div class="subtitle">
+    Cuenta <strong>RAW Pricing</strong> de Forex.com – 7 unidades de la moneda
+    base por lote y por lado.
+  </div>
+
+  <div class="card">
+    <label for="pair">Par (ej: EURUSD, GBPUSD, USDJPY)</label>
+    <input id="pair" type="text" placeholder="EURUSD" />
+
+    <label for="price">Precio actual del par</label>
+    <input id="price" type="number" step="0.00001" placeholder="1.0950" />
+
+    <label for="lot">Tamaño de lote (ej: 0.5, 1, 8)</label>
+    <input id="lot" type="number" step="0.01" placeholder="1" />
+
+    <div class="small">
+      Regla aplicada:
+      <br />• Si el par empieza con <strong>USD</strong> → 7 USD por lado por
+      lote.
+      <br />• Si el par termina en <strong>USD</strong> (EURUSD, GBPUSD,
+      AUDUSD, NZDUSD…) → 7 (moneda base) convertido a USD usando el precio.
+      <br />• Cruces sin USD se aproximan (ajusta tú si hace falta).
+    </div>
+    <div id="pairWarning" class="warning" style="display: none">
+      Este par no tiene USD como base ni como cotización. El cálculo es una
+      aproximación.
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="tradesDay">Trades totales por día (opcional)</label>
+    <input id="tradesDay" type="number" step="1" placeholder="20" />
+
+    <label for="tokyo">Trades sesión Tokyo (opcional)</label>
+    <input id="tokyo" type="number" step="1" placeholder="5" />
+
+    <label for="london">Trades sesión London (opcional)</label>
+    <input id="london" type="number" step="1" placeholder="10" />
+
+    <label for="ny">Trades sesión New York (opcional)</label>
+    <input id="ny" type="number" step="1" placeholder="3" />
+
+    <div class="small">
+      Si solo pones trades/día → calcula coste diario.
+      <br />
+      Si también pones Tokyo/London/NY → calcula coste por sesión.
+    </div>
+  </div>
+
+  <button id="calcBtn">CALCULAR</button>
+
+  <div class="card">
+    <div id="result" class="result">
+      Rellena los campos y pulsa CALCULAR.
+    </div>
+  </div>
+
+  <script>
+    function parsePair(raw) {
+      if (!raw) return null;
+      const p = raw.trim().toUpperCase();
+      if (!/^[A-Z]{6,7}$/.test(p)) return null;
+      const base = p.slice(0, 3);
+      const quote = p.slice(3, 6);
+      return { full: p, base, quote };
+    }
+
+    function calc() {
+      const pairInput = document.getElementById("pair").value;
+      const priceInput = parseFloat(document.getElementById("price").value);
+      const lotInput = parseFloat(document.getElementById("lot").value);
+      const tradesDay = parseFloat(
+        document.getElementById("tradesDay").value
+      );
+      const tradesTokyo = parseFloat(document.getElementById("tokyo").value);
+      const tradesLondon = parseFloat(document.getElementById("london").value);
+      const tradesNY = parseFloat(document.getElementById("ny").value);
+
+      const resultDiv = document.getElementById("result");
+      const pairWarning = document.getElementById("pairWarning");
+      pairWarning.style.display = "none";
+
+      const pair = parsePair(pairInput);
+      if (!pair) {
+        resultDiv.textContent =
+          "Par inválido. Escribe algo tipo EURUSD, GBPUSD, USDJPY…";
+        return;
+      }
+      if (!priceInput || priceInput <= 0) {
+        resultDiv.textContent = "Pon un precio válido (ej. 1.0950).";
+        return;
+      }
+      if (!lotInput || lotInput <= 0) {
+        resultDiv.textContent = "Pon un tamaño de lote mayor que 0.";
+        return;
+      }
+
+      const BASE = 7.0; // 7 unidades de moneda base por lado y por lote
+      let baseToUsd;
+
+      if (pair.base === "USD") {
+        // USDXXX → 1 USD = 1 USD
+        baseToUsd = 1.0;
+      } else if (pair.quote === "USD") {
+        // XXXUSD → 1 base = price USD
+        baseToUsd = priceInput;
+      } else {
+        // Cruces sin USD (aproximación)
+        baseToUsd = 1.0;
+        pairWarning.style.display = "block";
+      }
+
+      // Comisión por lado por lote en USD
+      const perSidePerLot = BASE * baseToUsd;
+      // Round-trip (in + out) por lote
+      const roundTripPerLot = perSidePerLot * 2;
+      // Comisión por trade con el lot size indicado
+      const perTrade = roundTripPerLot * lotInput;
+
+      let lines = [];
+      lines.push(`Par: ${pair.full}`);
+      lines.push(`Precio usado: ${priceInput}`);
+      lines.push(`Lotes: ${lotInput}`);
+      lines.push("");
+      lines.push("Por lote (1.0 lot):");
+      lines.push(`• Comisión por lado: $${perSidePerLot.toFixed(2)}`);
+      lines.push(
+        `• Comisión round-trip (in + out): $${roundTripPerLot.toFixed(2)}`
+      );
+      lines.push("");
+      lines.push(`Por trade con ${lotInput} lot(es):`);
+      lines.push(`• Comisión total (in + out): $${perTrade.toFixed(2)}`);
+
+      if (!isNaN(tradesDay) && tradesDay > 0) {
+        const daily = perTrade * tradesDay;
+        lines.push("");
+        lines.push(`Coste diario aprox (${tradesDay} trades/día):`);
+        lines.push(`• $${daily.toFixed(2)} en comisiones`);
+      }
+
+      const haveSessions =
+        (!isNaN(tradesTokyo) && tradesTokyo > 0) ||
+        (!isNaN(tradesLondon) && tradesLondon > 0) ||
+        (!isNaN(tradesNY) && tradesNY > 0);
+
+      if (haveSessions) {
+        lines.push("");
+        lines.push("Coste por sesión:");
+        if (!isNaN(tradesTokyo) && tradesTokyo > 0) {
+          lines.push(
+            `• Tokyo (${tradesTokyo} trades): $${(perTrade * tradesTokyo).toFixed(
+              2
+            )}`
+          );
+        }
+        if (!isNaN(tradesLondon) && tradesLondon > 0) {
+          lines.push(
+            `• London (${tradesLondon} trades): $${(
+              perTrade * tradesLondon
+            ).toFixed(2)}`
+          );
+        }
+        if (!isNaN(tradesNY) && tradesNY > 0) {
+          lines.push(
+            `• New York (${tradesNY} trades): $${(perTrade * tradesNY).toFixed(
+              2
+            )}`
+          );
+        }
+      }
+
+      resultDiv.textContent = lines.join("\n");
+    }
+
+    document.getElementById("calcBtn").addEventListener("click", calc);
+  </script>
 </body>
 </html>
